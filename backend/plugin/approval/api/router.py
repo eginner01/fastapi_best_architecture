@@ -197,6 +197,17 @@ async def cancel_instance(
     return response_base.success(data=result)
 
 
+@instance_router.delete('/{instance_id}', summary='删除审批实例', dependencies=[DependsJwtAuth])
+async def delete_instance(
+    request: Request,
+    instance_id: int,
+    db: CurrentSession,
+) -> ResponseModel:
+    """删除审批实例（仅允许删除非审批中的实例）"""
+    result = await instance_service.delete_instance(db, instance_id, request.user.id)
+    return response_base.success(data=result)
+
+
 @my_router.get('/initiated', summary='我发起的', dependencies=[DependsJwtAuth, DependsPagination])
 async def get_my_initiated(
     request: Request,

@@ -305,6 +305,35 @@ class InstanceService:
         log.info(f'流程实例 {instance_id} 已取消，所有待办任务已同步更新为CANCELLED状态')
         return True
 
+    async def delete_instance(
+        self,
+        db: AsyncSession,
+        instance_id: int,
+        user_id: int,
+    ) -> bool:
+        """
+        删除流程实例（仅允许删除非PENDING状态的实例）
+
+        :param db: 数据库会话
+        :param instance_id: 实例ID
+        :param user_id: 用户ID
+        :return: 是否成功
+        """
+        instance = await instance_dao.get_by_id(db, instance_id)
+        if not instance:
+            raise errors.NotFoundError(msg='流程实例不存在')
+        if instance.applicant_id != user_id:
+            raise errors.ForbiddenError(msg='只有发起人才能删除流程')
+        if instance.status == 'PENDING':
+            raise errors.ForbiddenError(msg='审批中的流程不能删除，请先撤销')
+
+        # 删除实例（会级联删除关联的步骤）
+        result = await instance_dao.delete(db, instance_id)
+        await db.commit()
+        
+        log.info(f'流程实例 {instance_id} 已删除 (用户: {user_id})')
+        return result > 0
+
 
 # 创建全局实例
 instance_service = InstanceService()

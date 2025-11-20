@@ -1,0 +1,86 @@
+Metadata-Version: 2.1
+Name: fast_captcha
+Version: 0.3.2
+Summary: Fast to use captcha
+Home-page: https://github.com/wu-clan/fast_captcha
+Author-Email: Wu Clan <jianhengwu0407@gmail.com>
+License: MIT
+Classifier: Intended Audience :: Developers
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Operating System :: OS Independent
+Classifier: Programming Language :: Python :: 3 :: Only
+Classifier: Programming Language :: Python :: 3.8
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Topic :: Software Development :: Libraries
+Classifier: Topic :: Software Development :: Libraries :: Python Modules
+Project-URL: Homepage, https://github.com/wu-clan/fast_captcha
+Project-URL: Repository, https://github.com/wu-clan/fast_captcha
+Requires-Python: <4.0,>=3.8
+Requires-Dist: Pillow>=10.0.0
+Description-Content-Type: text/markdown
+
+# fast_captcha
+
+fast to use captcha
+
+## Install
+
+```shell
+pip install fast-captcha
+```
+
+## Text Captcha
+
+```python
+from fast_captcha import text_captcha
+
+print(text_captcha())  # BnZU
+```
+
+## Image Captcha
+
+```python
+from fast_captcha import img_captcha
+
+img, text = img_captcha()
+
+print(img)  # <_io.BytesIO object at 0x000002366AB93DB0>
+print(text)  # 2z22
+```
+
+## FastAPI
+
+```python
+from fastapi import FastAPI
+from fastapi.responses import StreamingResponse
+
+from fast_captcha import img_captcha
+
+app = FastAPI()
+
+
+@app.get('/captcha', summary='captcha', name='captcha')
+def get_captcha():
+    img, text = img_captcha()
+    return StreamingResponse(content=img, media_type='image/jpeg')
+```
+
+## Django-Ninja
+
+```python
+from ninja import NinjaAPI
+from django.http import StreamingHttpResponse
+
+from fast_captcha import img_captcha
+
+app = NinjaAPI()
+
+
+@app.get('/captcha', summary='captcha', url_name='captcha')
+def get_captcha(request):
+    img, text = img_captcha()
+    return StreamingHttpResponse(streaming_content=img, content_type='image/jpeg')
+```
