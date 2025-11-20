@@ -8,7 +8,6 @@ from pydantic import ConfigDict, Field
 from backend.common.schema import SchemaBase
 
 
-# ==================== 创建流程实例Schema ====================
 class CreateInstanceParam(SchemaBase):
     """创建流程实例参数"""
 
@@ -22,7 +21,6 @@ class CreateInstanceParam(SchemaBase):
     attachments: list[dict] | None = Field(default=None, description='附件')
 
 
-# ==================== 处理流程实例Schema ====================
 class ProcessInstanceParam(SchemaBase):
     """处理流程实例参数"""
 
@@ -33,7 +31,6 @@ class ProcessInstanceParam(SchemaBase):
     return_to_node: int | None = Field(default=None, description='退回到节点ID')
 
 
-# ==================== 流程实例查询Schema ====================
 class InstanceQuery(SchemaBase):
     """流程实例查询参数"""
 
@@ -47,7 +44,6 @@ class InstanceQuery(SchemaBase):
     end_date: datetime | None = Field(default=None, description='结束日期')
 
 
-# ==================== 流程实例列表详情Schema ====================
 class GetInstanceListDetails(SchemaBase):
     """流程实例列表详情"""
 
@@ -70,7 +66,6 @@ class GetInstanceListDetails(SchemaBase):
     created_time: datetime
 
 
-# ==================== 流程步骤详情Schema ====================
 class StepDetail(SchemaBase):
     """流程步骤详情"""
 
@@ -90,7 +85,6 @@ class StepDetail(SchemaBase):
     is_read: bool
 
 
-# ==================== 流程实例详情Schema ====================
 class GetInstanceDetails(SchemaBase):
     """流程实例详细信息"""
 
@@ -118,7 +112,6 @@ class GetInstanceDetails(SchemaBase):
     steps: list[StepDetail] = []
 
 
-# ==================== 待办任务Schema ====================
 class TodoTaskSchema(SchemaBase):
     """待办任务"""
 
@@ -136,7 +129,6 @@ class TodoTaskSchema(SchemaBase):
     is_read: bool
 
 
-# ==================== 已办任务Schema ====================
 class DoneTaskSchema(SchemaBase):
     """已办任务"""
 

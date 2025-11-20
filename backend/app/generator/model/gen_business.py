@@ -33,4 +33,4 @@ class GenBusiness(Base):
         LONGTEXT().with_variant(TEXT, 'postgresql'), default=None, comment='备注'
     )
     # 代码生成业务模型一对多
-    gen_model: Mapped[list['GenModel']] = relationship(init=False, back_populates='gen_business')
+    gen_model: Mapped[list['GenModel']] = relationship('backend.app.generator.model.gen_model.GenModel', init=False, back_populates='gen_business')

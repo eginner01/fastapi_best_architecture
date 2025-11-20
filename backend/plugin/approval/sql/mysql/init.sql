@@ -6,7 +6,7 @@
 -- 2. 流程节点表 (approval_flow_node)
 -- 3. 流程线表 (approval_flow_line)
 -- 4. 流程实例表 (approval_instance)
--- 5. 流程步骤表 (approval_step) - 包含 node_no 字段
+-- 5. 流程步骤表 (approval_step)
 -- 6. 审批意见表 (approval_opinion)
 -- 7. 侧边栏菜单 (sys_menu) - 10个菜单项
 -- ============================================
@@ -88,7 +88,7 @@ CREATE TABLE IF NOT EXISTS `approval_instance` (
     `business_key` VARCHAR(100) COMMENT '关联业务数据的唯一键',
     `business_type` VARCHAR(50) COMMENT '业务类型',
     `form_data` JSON COMMENT '表单提交数据',
-    `started_at` TIMESTAMP NOT NULL COMMENT '流程开始时间',
+    `started_at` TIMESTAMP NULL COMMENT '流程开始时间',
     `ended_at` TIMESTAMP NULL COMMENT '流程结束时间',
     `duration` INT COMMENT '流程耗时(秒)',
     `urgency` VARCHAR(20) DEFAULT 'NORMAL' COMMENT '紧急程度',
@@ -109,7 +109,6 @@ CREATE TABLE IF NOT EXISTS `approval_step` (
     `id` BIGINT AUTO_INCREMENT PRIMARY KEY COMMENT '主键ID',
     `instance_id` BIGINT NOT NULL COMMENT '所属流程实例ID',
     `node_id` BIGINT NOT NULL COMMENT '关联流程节点ID',
-    `node_no` VARCHAR(50) NOT NULL COMMENT '节点编号',
     `step_no` VARCHAR(50) NOT NULL COMMENT '步骤编号',
     `assignee_id` BIGINT NOT NULL COMMENT '指定审批人用户ID',
     `assignee_name` VARCHAR(100) COMMENT '审批人姓名',
@@ -117,7 +116,7 @@ CREATE TABLE IF NOT EXISTS `approval_step` (
     `action` VARCHAR(20) COMMENT '执行操作',
     `opinion` TEXT COMMENT '审批意见',
     `attachments` JSON COMMENT '附件信息',
-    `started_at` TIMESTAMP NOT NULL COMMENT '步骤开始时间',
+    `started_at` TIMESTAMP NULL COMMENT '步骤开始时间',
     `completed_at` TIMESTAMP NULL COMMENT '步骤完成时间',
     `duration` INT COMMENT '处理耗时(秒)',
     `is_read` BOOLEAN DEFAULT FALSE COMMENT '是否已读',
@@ -126,7 +125,6 @@ CREATE TABLE IF NOT EXISTS `approval_step` (
     `created_time` TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     `updated_time` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
     INDEX `idx_instance_id` (`instance_id`),
-    INDEX `idx_node_no` (`node_no`),
     INDEX `idx_assignee_id` (`assignee_id`),
     INDEX `idx_status` (`status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='流程步骤表';

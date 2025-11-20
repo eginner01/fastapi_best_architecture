@@ -35,4 +35,4 @@ class GenModel(DataClassBase):
     gen_business_id: Mapped[int] = mapped_column(
         ForeignKey('sys_gen_business.id', ondelete='CASCADE'), default=0, comment='代码生成业务ID'
     )
-    gen_business: Mapped[Union['GenBusiness', None]] = relationship(init=False, back_populates='gen_model')
+    gen_business: Mapped[Union['GenBusiness', None]] = relationship('backend.app.generator.model.gen_business.GenBusiness', init=False, back_populates='gen_model')

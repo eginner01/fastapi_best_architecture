@@ -8,7 +8,6 @@ from pydantic import ConfigDict, Field
 from backend.common.schema import SchemaBase
 
 
-# ==================== 流程节点Schema ====================
 class FlowNodeSchema(SchemaBase):
     """流程节点Schema"""
 
@@ -28,7 +27,6 @@ class FlowNodeSchema(SchemaBase):
     settings: dict | None = Field(default=None, description='节点配置')
 
 
-# ==================== 流程线Schema ====================
 class FlowLineSchema(SchemaBase):
     """流程线Schema"""
 
@@ -42,7 +40,6 @@ class FlowLineSchema(SchemaBase):
     settings: dict | None = Field(default=None, description='连线配置')
 
 
-# ==================== 流程创建Schema ====================
 class CreateFlowParam(SchemaBase):
     """创建流程参数"""
 
@@ -57,7 +54,6 @@ class CreateFlowParam(SchemaBase):
     settings: dict | None = Field(default=None, description='流程配置')
 
 
-# ==================== 流程更新Schema ====================
 class UpdateFlowParam(SchemaBase):
     """更新流程参数"""
 
@@ -72,7 +68,6 @@ class UpdateFlowParam(SchemaBase):
     settings: dict | None = Field(default=None, description='流程配置')
 
 
-# ==================== 流程查询Schema ====================
 class FlowQuery(SchemaBase):
     """流程查询参数"""
 
@@ -82,7 +77,6 @@ class FlowQuery(SchemaBase):
     is_published: bool | None = Field(default=None, description='是否已发布')
 
 
-# ==================== 流程列表详情Schema ====================
 class GetFlowListDetails(SchemaBase):
     """流程列表详情"""
 
@@ -102,7 +96,6 @@ class GetFlowListDetails(SchemaBase):
     updated_time: datetime | None = None
 
 
-# ==================== 流程详情Schema ====================
 class FlowNodeDetail(SchemaBase):
     """流程节点详情"""
 
