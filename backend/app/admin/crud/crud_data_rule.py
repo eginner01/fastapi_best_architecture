@@ -1,10 +1,7 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-from typing import Sequence
+from collections.abc import Sequence
 
-from sqlalchemy import Select, and_, desc, select
+from sqlalchemy import Select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import noload
 from sqlalchemy_crud_plus import CRUDPlus
 
 from backend.app.admin.model import DataRule
@@ -12,7 +9,7 @@ from backend.app.admin.schema.data_rule import CreateDataRuleParam, UpdateDataRu
 
 
 class CRUDDataRule(CRUDPlus[DataRule]):
-    """数据权限规则数据库操作类"""
+    """数据规则数据库操作类"""
 
     async def get(self, db: AsyncSession, pk: int) -> DataRule | None:
         """
@@ -24,23 +21,19 @@ class CRUDDataRule(CRUDPlus[DataRule]):
         """
         return await self.select_model(db, pk)
 
-    async def get_list(self, name: str | None = None) -> Select:
+    async def get_select(self, name: str | None) -> Select:
         """
-        获取规则列表
+        获取规则列表查询表达式
 
         :param name: 规则名称
         :return:
         """
-        stmt = select(self.model).options(noload(self.model.roles)).order_by(desc(self.model.created_time))
+        filters = {}
 
-        filters = []
         if name is not None:
-            filters.append(self.model.name.like(f'%{name}%'))
+            filters['name__like'] = f'%{name}%'
 
-        if filters:
-            stmt = stmt.where(and_(*filters))
-
-        return stmt
+        return await self.select_order('id', **filters)
 
     async def get_by_name(self, db: AsyncSession, name: str) -> DataRule | None:
         """
@@ -82,15 +75,15 @@ class CRUDDataRule(CRUDPlus[DataRule]):
         """
         return await self.update_model(db, pk, obj)
 
-    async def delete(self, db: AsyncSession, pk: list[int]) -> int:
+    async def delete(self, db: AsyncSession, pks: list[int]) -> int:
         """
-        删除规则
+        批量删除规则
 
         :param db: 数据库会话
-        :param pk: 规则 ID 列表
+        :param pks: 规则 ID 列表
         :return:
         """
-        return await self.delete_model_by_column(db, allow_multiple=True, id__in=pk)
+        return await self.delete_model_by_column(db, allow_multiple=True, id__in=pks)
 
 
 data_rule_dao: CRUDDataRule = CRUDDataRule(DataRule)

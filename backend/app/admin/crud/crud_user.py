@@ -1,22 +1,22 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
+from typing import Any
+
 import bcrypt
 
-from sqlalchemy import and_, desc, select
+from sqlalchemy import Select, delete, insert, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import noload, selectinload
-from sqlalchemy.sql import Select
-from sqlalchemy_crud_plus import CRUDPlus
+from sqlalchemy_crud_plus import CRUDPlus, JoinConfig
 
-from backend.app.admin.model import Dept, Role, User
+from backend.app.admin.model import DataRule, DataScope, Dept, Menu, Role, User
+from backend.app.admin.model.m2m import data_scope_rule, role_data_scope, role_menu, user_role
 from backend.app.admin.schema.user import (
+    AddOAuth2UserParam,
     AddUserParam,
-    AvatarParam,
-    RegisterUserParam,
+    AddUserRoleParam,
     UpdateUserParam,
-    UpdateUserRoleParam,
 )
 from backend.common.security.jwt import get_hash_password
+from backend.plugin.oauth2.crud.crud_user_social import user_social_dao
+from backend.utils.serializers import select_join_serialize
 from backend.utils.timezone import timezone
 
 
@@ -63,26 +63,6 @@ class CRUDUser(CRUDPlus[User]):
         """
         return await self.update_model_by_column(db, {'last_login_time': timezone.now()}, username=username)
 
-    async def create(self, db: AsyncSession, obj: RegisterUserParam, *, social: bool = False) -> None:
-        """
-        创建用户
-
-        :param db: 数据库会话
-        :param obj: 注册用户参数
-        :param social: 是否社交用户
-        :return:
-        """
-        if not social:
-            salt = bcrypt.gensalt()
-            obj.password = get_hash_password(obj.password, salt)
-            dict_obj = obj.model_dump()
-            dict_obj.update({'is_staff': True, 'salt': salt})
-        else:
-            dict_obj = obj.model_dump()
-            dict_obj.update({'is_staff': True, 'salt': None})
-        new_user = self.model(**dict_obj)
-        db.add(new_user)
-
     async def add(self, db: AsyncSession, obj: AddUserParam) -> None:
         """
         添加用户
@@ -93,18 +73,43 @@ class CRUDUser(CRUDPlus[User]):
         """
         salt = bcrypt.gensalt()
         obj.password = get_hash_password(obj.password, salt)
+
         dict_obj = obj.model_dump(exclude={'roles'})
         dict_obj.update({'salt': salt})
         new_user = self.model(**dict_obj)
-
-        role_list = []
-        for role_id in obj.roles:
-            role_list.append(await db.get(Role, role_id))
-        new_user.roles.extend(role_list)
-
         db.add(new_user)
+        await db.flush()
 
-    async def update_userinfo(self, db: AsyncSession, input_user: int, obj: UpdateUserParam) -> int:
+        role_stmt = select(Role).where(Role.id.in_(obj.roles))
+        result = await db.execute(role_stmt)
+        roles = result.scalars().all()
+
+        user_role_data = [AddUserRoleParam(user_id=new_user.id, role_id=role.id).model_dump() for role in roles]
+        user_role_stmt = insert(user_role)
+        await db.execute(user_role_stmt, user_role_data)
+
+    async def add_by_oauth2(self, db: AsyncSession, obj: AddOAuth2UserParam) -> None:
+        """
+        通过 OAuth2 添加用户
+
+        :param db: 数据库会话
+        :param obj: 注册用户参数
+        :return:
+        """
+        dict_obj = obj.model_dump()
+        dict_obj.update({'is_staff': True, 'salt': None})
+        new_user = self.model(**dict_obj)
+        db.add(new_user)
+        await db.flush()
+
+        role_stmt = select(Role)
+        result = await db.execute(role_stmt)
+        role = result.scalars().first()  # 默认绑定第一个角色
+
+        user_role_stmt = insert(user_role).values(AddUserRoleParam(user_id=new_user.id, role_id=role.id).model_dump())
+        await db.execute(user_role_stmt)
+
+    async def update(self, db: AsyncSession, input_user: User, obj: UpdateUserParam) -> int:
         """
         更新用户信息
 
@@ -113,36 +118,56 @@ class CRUDUser(CRUDPlus[User]):
         :param obj: 更新用户参数
         :return:
         """
-        return await self.update_model(db, input_user, obj)
+        role_ids = obj.roles
+        del obj.roles
 
-    @staticmethod
-    async def update_role(db: AsyncSession, input_user: User, obj: UpdateUserRoleParam) -> None:
+        count = await self.update_model(db, input_user.id, obj)
+
+        role_stmt = select(Role).where(Role.id.in_(role_ids))
+        result = await db.execute(role_stmt)
+        roles = result.scalars().all()
+
+        user_role_stmt = delete(user_role).where(user_role.c.user_id == input_user.id)
+        await db.execute(user_role_stmt)
+
+        user_role_data = [AddUserRoleParam(user_id=input_user.id, role_id=role.id).model_dump() for role in roles]
+        user_role_stmt = insert(user_role)
+        await db.execute(user_role_stmt, user_role_data)
+
+        return count
+
+    async def update_nickname(self, db: AsyncSession, user_id: int, nickname: str) -> int:
         """
-        更新用户角色
+        更新用户昵称
 
         :param db: 数据库会话
-        :param input_user: 用户对象
-        :param obj: 更新角色参数
+        :param user_id: 用户 ID
+        :param nickname: 用户昵称
         :return:
         """
-        for i in list(input_user.roles):
-            input_user.roles.remove(i)
+        return await self.update_model(db, user_id, {'nickname': nickname})
 
-        role_list = []
-        for role_id in obj.roles:
-            role_list.append(await db.get(Role, role_id))
-        input_user.roles.extend(role_list)
-
-    async def update_avatar(self, db: AsyncSession, input_user: int, avatar: AvatarParam) -> int:
+    async def update_avatar(self, db: AsyncSession, user_id: int, avatar: str) -> int:
         """
         更新用户头像
 
         :param db: 数据库会话
-        :param input_user: 用户 ID
+        :param user_id: 用户 ID
         :param avatar: 头像地址
         :return:
         """
-        return await self.update_model(db, input_user, {'avatar': avatar.url})
+        return await self.update_model(db, user_id, {'avatar': avatar})
+
+    async def update_email(self, db: AsyncSession, user_id: int, email: str) -> int:
+        """
+        更新用户邮箱
+
+        :param db: 数据库会话
+        :param user_id: 用户 ID
+        :param email: 邮箱
+        :return:
+        """
+        return await self.update_model(db, user_id, {'email': email})
 
     async def delete(self, db: AsyncSession, user_id: int) -> int:
         """
@@ -152,11 +177,16 @@ class CRUDUser(CRUDPlus[User]):
         :param user_id: 用户 ID
         :return:
         """
+        user_role_stmt = delete(user_role).where(user_role.c.user_id == user_id)
+        await db.execute(user_role_stmt)
+
+        await user_social_dao.delete_by_user_id(db, user_id)
+
         return await self.delete_model(db, user_id)
 
     async def check_email(self, db: AsyncSession, email: str) -> User | None:
         """
-        检查邮箱是否已被注册
+        检查邮箱是否已被绑定
 
         :param db: 数据库会话
         :param email: 电子邮箱
@@ -164,22 +194,22 @@ class CRUDUser(CRUDPlus[User]):
         """
         return await self.select_model_by_column(db, email=email)
 
-    async def reset_password(self, db: AsyncSession, pk: int, new_pwd: str) -> int:
+    async def reset_password(self, db: AsyncSession, pk: int, password: str) -> int:
         """
         重置用户密码
 
         :param db: 数据库会话
         :param pk: 用户 ID
-        :param new_pwd: 新密码（已加密）
+        :param password: 新密码
         :return:
         """
-        return await self.update_model(db, pk, {'password': new_pwd})
+        salt = bcrypt.gensalt()
+        new_pwd = get_hash_password(password, salt)
+        return await self.update_model(db, pk, {'password': new_pwd, 'salt': salt})
 
-    async def get_list(
-        self, dept: int | None = None, username: str | None = None, phone: str | None = None, status: int | None = None
-    ) -> Select:
+    async def get_select(self, dept: int | None, username: str | None, phone: str | None, status: int | None) -> Select:
         """
-        获取用户列表
+        获取用户列表查询表达式
 
         :param dept: 部门 ID
         :param username: 用户名
@@ -187,76 +217,29 @@ class CRUDUser(CRUDPlus[User]):
         :param status: 用户状态
         :return:
         """
-        stmt = (
-            select(self.model)
-            .options(
-                selectinload(self.model.dept).options(noload(Dept.parent), noload(Dept.children), noload(Dept.users)),
-                noload(self.model.socials),
-                selectinload(self.model.roles).options(noload(Role.users), noload(Role.menus), noload(Role.rules)),
-            )
-            .order_by(desc(self.model.join_time))
+        filters = {}
+
+        if dept:
+            filters['dept_id'] = dept
+        if username:
+            filters['username__like'] = f'%{username}%'
+        if phone:
+            filters['phone__like'] = f'%{phone}%'
+        if status is not None:
+            filters['status'] = status
+
+        return await self.select_order(
+            'id',
+            'desc',
+            join_conditions=[
+                JoinConfig(model=Dept, join_on=Dept.id == self.model.dept_id, fill_result=True),
+                JoinConfig(model=user_role, join_on=user_role.c.user_id == self.model.id),
+                JoinConfig(model=Role, join_on=Role.id == user_role.c.role_id, fill_result=True),
+            ],
+            **filters,
         )
 
-        filters = []
-        if dept:
-            filters.append(self.model.dept_id == dept)
-        if username:
-            filters.append(self.model.username.like(f'%{username}%'))
-        if phone:
-            filters.append(self.model.phone.like(f'%{phone}%'))
-        if status is not None:
-            filters.append(self.model.status == status)
-
-        if filters:
-            stmt = stmt.where(and_(*filters))
-
-        return stmt
-
-    async def get_super(self, db: AsyncSession, user_id: int) -> bool:
-        """
-        获取用户是否为超级管理员
-
-        :param db: 数据库会话
-        :param user_id: 用户 ID
-        :return:
-        """
-        user = await self.get(db, user_id)
-        return user.is_superuser
-
-    async def get_staff(self, db: AsyncSession, user_id: int) -> bool:
-        """
-        获取用户是否可以登录后台
-
-        :param db: 数据库会话
-        :param user_id: 用户 ID
-        :return:
-        """
-        user = await self.get(db, user_id)
-        return user.is_staff
-
-    async def get_status(self, db: AsyncSession, user_id: int) -> int:
-        """
-        获取用户状态
-
-        :param db: 数据库会话
-        :param user_id: 用户 ID
-        :return:
-        """
-        user = await self.get(db, user_id)
-        return user.status
-
-    async def get_multi_login(self, db: AsyncSession, user_id: int) -> bool:
-        """
-        获取用户是否允许多端登录
-
-        :param db: 数据库会话
-        :param user_id: 用户 ID
-        :return:
-        """
-        user = await self.get(db, user_id)
-        return user.is_multi_login
-
-    async def set_super(self, db: AsyncSession, user_id: int, is_super: bool) -> int:
+    async def set_super(self, db: AsyncSession, user_id: int, *, is_super: bool) -> int:
         """
         设置用户超级管理员状态
 
@@ -267,7 +250,7 @@ class CRUDUser(CRUDPlus[User]):
         """
         return await self.update_model(db, user_id, {'is_superuser': is_super})
 
-    async def set_staff(self, db: AsyncSession, user_id: int, is_staff: bool) -> int:
+    async def set_staff(self, db: AsyncSession, user_id: int, *, is_staff: bool) -> int:
         """
         设置用户后台登录状态
 
@@ -289,7 +272,7 @@ class CRUDUser(CRUDPlus[User]):
         """
         return await self.update_model(db, user_id, {'status': status})
 
-    async def set_multi_login(self, db: AsyncSession, user_id: int, multi_login: bool) -> int:
+    async def set_multi_login(self, db: AsyncSession, user_id: int, *, multi_login: bool) -> int:
         """
         设置用户多端登录状态
 
@@ -300,9 +283,13 @@ class CRUDUser(CRUDPlus[User]):
         """
         return await self.update_model(db, user_id, {'is_multi_login': multi_login})
 
-    async def get_with_relation(
-        self, db: AsyncSession, *, user_id: int | None = None, username: str | None = None
-    ) -> User | None:
+    async def get_join(
+        self,
+        db: AsyncSession,
+        *,
+        user_id: int | None = None,
+        username: str | None = None,
+    ) -> Any | None:
         """
         获取用户关联信息
 
@@ -311,22 +298,39 @@ class CRUDUser(CRUDPlus[User]):
         :param username: 用户名
         :return:
         """
-        stmt = select(self.model).options(
-            selectinload(self.model.dept),
-            selectinload(self.model.roles).options(selectinload(Role.menus), selectinload(Role.rules)),
+        filters = {}
+
+        if user_id:
+            filters['id'] = user_id
+        if username:
+            filters['username'] = username
+
+        result = await self.select_models(
+            db,
+            join_conditions=[
+                JoinConfig(model=Dept, join_on=Dept.id == self.model.dept_id, fill_result=True),
+                JoinConfig(model=user_role, join_on=user_role.c.user_id == self.model.id),
+                JoinConfig(model=Role, join_on=Role.id == user_role.c.role_id, fill_result=True),
+                JoinConfig(model=role_menu, join_on=role_menu.c.role_id == Role.id),
+                JoinConfig(model=Menu, join_on=Menu.id == role_menu.c.menu_id, fill_result=True),
+                JoinConfig(model=role_data_scope, join_on=role_data_scope.c.role_id == Role.id),
+                JoinConfig(model=DataScope, join_on=DataScope.id == role_data_scope.c.data_scope_id, fill_result=True),
+                JoinConfig(model=data_scope_rule, join_on=data_scope_rule.c.data_scope_id == DataScope.id),
+                JoinConfig(model=DataRule, join_on=DataRule.id == data_scope_rule.c.data_rule_id, fill_result=True),
+            ],
+            **filters,
         )
 
-        filters = []
-        if user_id:
-            filters.append(self.model.id == user_id)
-        if username:
-            filters.append(self.model.username == username)
-
-        if filters:
-            stmt = stmt.where(and_(*filters))
-
-        user = await db.execute(stmt)
-        return user.scalars().first()
+        return select_join_serialize(
+            result,
+            relationships=[
+                'User-m2o-Dept',
+                'User-m2m-Role',
+                'Role-m2m-Menu',
+                'Role-m2m-DataScope:scopes',
+                'DataScope-m2m-DataRule:rules',
+            ],
+        )
 
 
 user_dao: CRUDUser = CRUDUser(User)

@@ -1,15 +1,15 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 import inspect
 import logging
 import os
+import re
 import sys
 
-from asgi_correlation_id import correlation_id
 from loguru import logger
 
-from backend.core import path_conf
 from backend.core.conf import settings
+from backend.core.path_conf import LOG_DIR
+from backend.utils.timezone import timezone
+from backend.utils.trace_id import get_request_trace_id
 
 
 class InterceptHandler(logging.Handler):
@@ -19,7 +19,7 @@ class InterceptHandler(logging.Handler):
     参考：https://loguru.readthedocs.io/en/stable/overview.html#entirely-compatible-with-standard-logging
     """
 
-    def emit(self, record: logging.LogRecord):
+    def emit(self, record: logging.LogRecord) -> None:
         # 获取对应的 Loguru 级别（如果存在）
         try:
             level = logger.level(record.levelname).name
@@ -35,6 +35,18 @@ class InterceptHandler(logging.Handler):
         logger.opt(depth=depth, exception=record.exc_info).log(level, record.getMessage())
 
 
+def default_formatter(record: logging.LogRecord) -> str:
+    """默认日志格式化程序"""
+
+    # 重写 sqlalchemy echo 输出
+    # https://github.com/sqlalchemy/sqlalchemy/discussions/12791
+    record_name = record['name'] or ''
+    if record_name.startswith('sqlalchemy'):
+        record['message'] = re.sub(r'\s+', ' ', record['message']).strip()
+
+    return settings.LOG_FORMAT if settings.LOG_FORMAT.endswith('\n') else f'{settings.LOG_FORMAT}\n'
+
+
 def setup_logging() -> None:
     """
     设置日志处理器
@@ -47,9 +59,11 @@ def setup_logging() -> None:
     logging.root.handlers = [InterceptHandler()]
     logging.root.setLevel(settings.LOG_STD_LEVEL)
 
-    # 配置日志传播规则
     for name in logging.root.manager.loggerDict.keys():
+        # 清空所有默认日志处理器
         logging.getLogger(name).handlers = []
+
+        # 配置日志传播规则
         if 'uvicorn.access' in name or 'watchfiles.main' in name:
             logging.getLogger(name).propagate = False
         else:
@@ -58,51 +72,59 @@ def setup_logging() -> None:
         # Debug log handlers
         # logging.debug(f'{logging.getLogger(name)}, {logging.getLogger(name).propagate}')
 
-    # 定义 correlation_id 默认过滤函数
-    # https://github.com/snok/asgi-correlation-id/issues/7
-    def correlation_id_filter(record):
-        cid = correlation_id.get(settings.LOG_CID_DEFAULT_VALUE)
-        record['correlation_id'] = cid[: settings.LOG_CID_UUID_LENGTH]
+    # 移除 loguru 默认处理器
+    logger.remove()
+
+    # request_id 过滤器
+    def request_id_filter(record: logging.LogRecord) -> logging.LogRecord:
+        rid = get_request_trace_id()
+        record['request_id'] = rid[: settings.TRACE_ID_LOG_LENGTH]
         return record
 
     # 配置 loguru 处理器
-    logger.remove()  # 移除默认处理器
     logger.configure(
         handlers=[
             {
                 'sink': sys.stdout,
                 'level': settings.LOG_STD_LEVEL,
-                'filter': lambda record: correlation_id_filter(record),
-                'format': settings.LOG_STD_FORMAT,
-            }
-        ]
+                'format': default_formatter,
+                'filter': lambda record: request_id_filter(record),
+            },
+        ],
     )
 
 
 def set_custom_logfile() -> None:
     """设置自定义日志文件"""
-    log_path = path_conf.LOG_DIR
-    if not os.path.exists(log_path):
-        os.mkdir(log_path)
+    if not os.path.exists(LOG_DIR):
+        os.mkdir(LOG_DIR)
 
     # 日志文件
-    log_access_file = os.path.join(log_path, settings.LOG_ACCESS_FILENAME)
-    log_error_file = os.path.join(log_path, settings.LOG_ERROR_FILENAME)
+    log_access_file = LOG_DIR / settings.LOG_ACCESS_FILENAME
+    log_error_file = LOG_DIR / settings.LOG_ERROR_FILENAME
+
+    # 日志压缩回调
+    def compression(filepath: str) -> str:
+        filename = filepath.split(os.sep)[-1]
+        original_filename = filename.split('.')[0]
+        if '-' in original_filename:
+            return LOG_DIR / f'{original_filename}.log'
+        return LOG_DIR / f'{original_filename}_{timezone.now().strftime("%Y-%m-%d")}.log'
 
     # 日志文件通用配置
     # https://loguru.readthedocs.io/en/stable/api/logger.html#loguru._logger.Logger.add
     log_config = {
-        'format': settings.LOG_FILE_FORMAT,
+        'format': default_formatter,
         'enqueue': True,
-        'rotation': '5 MB',
+        'rotation': '00:00',
         'retention': '7 days',
-        'compression': 'tar.gz',
+        'compression': lambda filepath: os.rename(filepath, compression(filepath)),
     }
 
     # 标准输出文件
     logger.add(
         str(log_access_file),
-        level=settings.LOG_ACCESS_FILE_LEVEL,
+        level=settings.LOG_FILE_ACCESS_LEVEL,
         filter=lambda record: record['level'].no <= 25,
         backtrace=False,
         diagnose=False,
@@ -112,7 +134,7 @@ def set_custom_logfile() -> None:
     # 标准错误文件
     logger.add(
         str(log_error_file),
-        level=settings.LOG_ERROR_FILE_LEVEL,
+        level=settings.LOG_FILE_ERROR_LEVEL,
         filter=lambda record: record['level'].no >= 30,
         backtrace=True,
         diagnose=True,

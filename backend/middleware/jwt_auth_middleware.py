@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 from typing import Any
 
 from fastapi import Request, Response
@@ -19,7 +17,11 @@ class _AuthenticationError(AuthenticationError):
     """重写内部认证错误类"""
 
     def __init__(
-        self, *, code: int | None = None, msg: str | None = None, headers: dict[str, Any] | None = None
+        self,
+        *,
+        code: int | None = None,
+        msg: str | None = None,
+        headers: dict[str, Any] | None = None,
     ) -> None:
         """
         初始化认证错误
@@ -59,8 +61,12 @@ class JwtAuthMiddleware(AuthenticationBackend):
         if not token:
             return None
 
-        if request.url.path in settings.TOKEN_REQUEST_PATH_EXCLUDE:
+        path = request.url.path
+        if path in settings.TOKEN_REQUEST_PATH_EXCLUDE:
             return None
+        for pattern in settings.TOKEN_REQUEST_PATH_EXCLUDE_PATTERN:
+            if pattern.match(path):
+                return None
 
         scheme, token = get_authorization_scheme_param(token)
         if scheme.lower() != 'bearer':
@@ -71,7 +77,7 @@ class JwtAuthMiddleware(AuthenticationBackend):
         except TokenError as exc:
             raise _AuthenticationError(code=exc.code, msg=exc.detail, headers=exc.headers)
         except Exception as e:
-            log.error(f'JWT 授权异常：{e}')
+            log.exception(f'JWT 授权异常：{e}')
             raise _AuthenticationError(code=getattr(e, 'code', 500), msg=getattr(e, 'msg', 'Internal Server Error'))
 
         # 请注意，此返回使用非标准模式，所以在认证通过时，将丢失某些标准特性

@@ -1,15 +1,15 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 from fastapi import Depends, Request
 
+from backend.common.context import ctx
 from backend.common.enums import MethodType, StatusType
-from backend.common.exception.errors import AuthorizationError, TokenError
+from backend.common.exception import errors
+from backend.common.log import log
 from backend.common.security.jwt import DependsJwtAuth
 from backend.core.conf import settings
-from backend.plugin.casbin.utils.rbac import casbin_verify
+from backend.utils.import_parse import import_module_cached
 
 
-async def rbac_verify(request: Request, _token: str = DependsJwtAuth) -> None:
+async def rbac_verify(request: Request, _token: str = DependsJwtAuth) -> None:  # noqa: C901
     """
     RBAC 权限校验（鉴权顺序很重要，谨慎修改）
 
@@ -22,10 +22,13 @@ async def rbac_verify(request: Request, _token: str = DependsJwtAuth) -> None:
     # API 鉴权白名单
     if path in settings.TOKEN_REQUEST_PATH_EXCLUDE:
         return
+    for pattern in settings.TOKEN_REQUEST_PATH_EXCLUDE_PATTERN:
+        if pattern.match(path):
+            return
 
     # JWT 授权状态强制校验
     if not request.auth.scopes:
-        raise TokenError
+        raise errors.TokenError
 
     # 超级管理员免校验
     if request.user.is_superuser:
@@ -34,21 +37,20 @@ async def rbac_verify(request: Request, _token: str = DependsJwtAuth) -> None:
     # 检测用户角色
     user_roles = request.user.roles
     if not user_roles or all(status == 0 for status in user_roles):
-        raise AuthorizationError(msg='用户未分配角色，请联系系统管理员')
+        raise errors.AuthorizationError(msg='用户未分配角色，请联系系统管理员')
 
     # 检测用户所属角色菜单
     if not any(len(role.menus) > 0 for role in user_roles):
-        raise AuthorizationError(msg='用户未分配菜单，请联系系统管理员')
+        raise errors.AuthorizationError(msg='用户未分配菜单，请联系系统管理员')
 
     # 检测后台管理操作权限
     method = request.method
-    if method != MethodType.GET or method != MethodType.OPTIONS:
-        if not request.user.is_staff:
-            raise AuthorizationError(msg='用户已被禁止后台管理操作，请联系系统管理员')
+    if (method != MethodType.GET or method != MethodType.OPTIONS) and not request.user.is_staff:
+        raise errors.AuthorizationError(msg='用户已被禁止后台管理操作，请联系系统管理员')
 
     # RBAC 鉴权
     if settings.RBAC_ROLE_MENU_MODE:
-        path_auth_perm = getattr(request.state, 'permission', None)
+        path_auth_perm = ctx.permission
 
         # 没有菜单操作权限标识不校验
         if not path_auth_perm:
@@ -58,15 +60,27 @@ async def rbac_verify(request: Request, _token: str = DependsJwtAuth) -> None:
         if path_auth_perm in settings.RBAC_ROLE_MENU_EXCLUDE:
             return
 
-        # 已分配菜单权限校验
-        allow_perms = []
+        # 菜单去重
+        unique_menus = {}
         for role in user_roles:
             for menu in role.menus:
-                if menu.perms and menu.status == StatusType.enable:
-                    allow_perms.extend(menu.perms.split(','))
+                unique_menus[menu.id] = menu
+
+        # 已分配菜单权限校验
+        allow_perms = []
+        for menu in list(unique_menus.values()):
+            if menu.perms and menu.status == StatusType.enable:
+                allow_perms.extend(menu.perms.split(','))
         if path_auth_perm not in allow_perms:
-            raise AuthorizationError
+            raise errors.AuthorizationError
     else:
+        try:
+            casbin_rbac = import_module_cached('backend.plugin.casbin_rbac.rbac')
+            casbin_verify = casbin_rbac.casbin_verify
+        except (ImportError, AttributeError) as e:
+            log.error(f'正在通过 casbin 执行 RBAC 权限校验，但此插件不存在: {e}')
+            raise errors.ServerError(msg='权限校验失败，请联系系统管理员')
+
         await casbin_verify(request)
 
 

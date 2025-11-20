@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 from datetime import datetime
 
 from pydantic import ConfigDict, Field
@@ -17,7 +15,7 @@ class DeptSchemaBase(SchemaBase):
     leader: str | None = Field(None, description='负责人')
     phone: CustomPhoneNumber | None = Field(None, description='联系电话')
     email: CustomEmailStr | None = Field(None, description='邮箱')
-    status: StatusType = Field(StatusType.enable, description='状态')
+    status: StatusType = Field(description='状态')
 
 
 class CreateDeptParam(DeptSchemaBase):
@@ -37,3 +35,9 @@ class GetDeptDetail(DeptSchemaBase):
     del_flag: bool = Field(description='是否删除')
     created_time: datetime = Field(description='创建时间')
     updated_time: datetime | None = Field(None, description='更新时间')
+
+
+class GetDeptTree(GetDeptDetail):
+    """获取部门树"""
+
+    children: list['GetDeptTree'] | None = Field(None, description='子菜单')

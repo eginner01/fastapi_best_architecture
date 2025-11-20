@@ -1,29 +1,35 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 import os
 
+from asyncio import create_task
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator
 
 import socketio
 
-from asgi_correlation_id import CorrelationIdMiddleware
 from fastapi import Depends, FastAPI
 from fastapi_limiter import FastAPILimiter
 from fastapi_pagination import add_pagination
 from starlette.middleware.authentication import AuthenticationMiddleware
+from starlette.middleware.cors import CORSMiddleware
 from starlette.staticfiles import StaticFiles
+from starlette.types import ASGIApp
+from starlette_context.middleware import ContextMiddleware
+from starlette_context.plugins import RequestIdPlugin
 
+from backend import __version__
 from backend.common.exception.exception_handler import register_exception
 from backend.common.log import set_custom_logfile, setup_logging
+from backend.common.response.response_code import StandardResponseCode
 from backend.core.conf import settings
 from backend.core.path_conf import STATIC_DIR, UPLOAD_DIR
-from backend.database.db import create_table
+from backend.database.db import create_tables
 from backend.database.redis import redis_client
+from backend.middleware.access_middleware import AccessMiddleware
+from backend.middleware.i18n_middleware import I18nMiddleware
 from backend.middleware.jwt_auth_middleware import JwtAuthMiddleware
 from backend.middleware.opera_log_middleware import OperaLogMiddleware
 from backend.middleware.state_middleware import StateMiddleware
-from backend.plugin.tools import plugin_router_inject
+from backend.plugin.tools import build_final_router
 from backend.utils.demo_site import demo_site
 from backend.utils.health_check import ensure_unique_route_names, http_limit_callback
 from backend.utils.openapi import simplify_operation_ids
@@ -39,9 +45,11 @@ async def register_init(app: FastAPI) -> AsyncGenerator[None, None]:
     :return:
     """
     # 创建数据库表
-    await create_table()
-    # 连接 redis
+    await create_tables()
+
+    # 初始化 redis
     await redis_client.open()
+
     # 初始化 limiter
     await FastAPILimiter.init(
         redis=redis_client,
@@ -49,19 +57,36 @@ async def register_init(app: FastAPI) -> AsyncGenerator[None, None]:
         http_callback=http_limit_callback,
     )
 
+    # 创建操作日志任务
+    create_task(OperaLogMiddleware.consumer())
+
     yield
 
     # 关闭 redis 连接
-    await redis_client.close()
-    # 关闭 limiter
-    await FastAPILimiter.close()
+    await redis_client.aclose()
 
 
 def register_app() -> FastAPI:
     """注册 FastAPI 应用"""
-    app = FastAPI(
+
+    class MyFastAPI(FastAPI):
+        if settings.MIDDLEWARE_CORS:
+            # Related issues
+            # https://github.com/fastapi/fastapi/discussions/7847
+            # https://github.com/fastapi/fastapi/discussions/8027
+            def build_middleware_stack(self) -> ASGIApp:
+                return CORSMiddleware(
+                    super().build_middleware_stack(),
+                    allow_origins=settings.CORS_ALLOWED_ORIGINS,
+                    allow_credentials=True,
+                    allow_methods=['*'],
+                    allow_headers=['*'],
+                    expose_headers=settings.CORS_EXPOSE_HEADERS,
+                )
+
+    app = MyFastAPI(
         title=settings.FASTAPI_TITLE,
-        version=settings.FASTAPI_VERSION,
+        version=__version__,
         description=settings.FASTAPI_DESCRIPTION,
         docs_url=settings.FASTAPI_DOCS_URL,
         redoc_url=settings.FASTAPI_REDOC_URL,
@@ -71,8 +96,8 @@ def register_app() -> FastAPI:
     )
 
     # 注册组件
-    register_socket_app(app)
     register_logger()
+    register_socket_app(app)
     register_static_file(app)
     register_middleware(app)
     register_router(app)
@@ -112,40 +137,34 @@ def register_middleware(app: FastAPI) -> None:
     :param app: FastAPI 应用实例
     :return:
     """
-    # Opera log (必须)
+    # Opera log
     app.add_middleware(OperaLogMiddleware)
 
-    # JWT auth (必须)
+    # State
+    app.add_middleware(StateMiddleware)
+
+    # JWT auth
     app.add_middleware(
         AuthenticationMiddleware,
         backend=JwtAuthMiddleware(),
         on_error=JwtAuthMiddleware.auth_exception_handler,
     )
 
+    # I18n
+    app.add_middleware(I18nMiddleware)
+
     # Access log
-    if settings.MIDDLEWARE_ACCESS:
-        from backend.middleware.access_middleware import AccessMiddleware
+    app.add_middleware(AccessMiddleware)
 
-        app.add_middleware(AccessMiddleware)
-
-    # State
-    app.add_middleware(StateMiddleware)
-
-    # Trace ID (必须)
-    app.add_middleware(CorrelationIdMiddleware, validator=False)
-
-    # CORS（必须放在最下面）
-    if settings.MIDDLEWARE_CORS:
-        from fastapi.middleware.cors import CORSMiddleware
-
-        app.add_middleware(
-            CORSMiddleware,
-            allow_origins=settings.CORS_ALLOWED_ORIGINS,
-            allow_credentials=True,
-            allow_methods=['*'],
-            allow_headers=['*'],
-            expose_headers=settings.CORS_EXPOSE_HEADERS,
-        )
+    # ContextVar
+    app.add_middleware(
+        ContextMiddleware,
+        plugins=[RequestIdPlugin(validate=True)],
+        default_error_response=MsgSpecJSONResponse(
+            content={'code': StandardResponseCode.HTTP_400, 'msg': 'BAD_REQUEST', 'data': None},
+            status_code=StandardResponseCode.HTTP_400,
+        ),
+    )
 
 
 def register_router(app: FastAPI) -> None:
@@ -157,12 +176,8 @@ def register_router(app: FastAPI) -> None:
     """
     dependencies = [Depends(demo_site)] if settings.DEMO_MODE else None
 
-    # 插件路由
-    plugin_router_inject()
-
-    # 系统路由（必须在插件路由注入后导入）
-    from backend.app.router import router
-
+    # API
+    router = build_final_router()
     app.include_router(router, dependencies=dependencies)
 
     # Extra

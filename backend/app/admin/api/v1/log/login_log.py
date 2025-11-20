@@ -1,17 +1,15 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
 
-from backend.app.admin.schema.login_log import GetLoginLogDetail
+from backend.app.admin.schema.login_log import DeleteLoginLogParam, GetLoginLogDetail
 from backend.app.admin.service.login_log_service import login_log_service
-from backend.common.pagination import DependsPagination, PageData, paging_data
+from backend.common.pagination import DependsPagination, PageData
 from backend.common.response.response_schema import ResponseModel, ResponseSchemaModel, response_base
 from backend.common.security.jwt import DependsJwtAuth
 from backend.common.security.permission import RequestPermission
 from backend.common.security.rbac import DependsRBAC
-from backend.database.db import CurrentSession
+from backend.database.db import CurrentSession, CurrentSessionTransaction
 
 router = APIRouter()
 
@@ -24,14 +22,14 @@ router = APIRouter()
         DependsPagination,
     ],
 )
-async def get_pagination_login_logs(
+async def get_login_logs_paginated(
     db: CurrentSession,
     username: Annotated[str | None, Query(description='用户名')] = None,
     status: Annotated[int | None, Query(description='状态')] = None,
     ip: Annotated[str | None, Query(description='IP 地址')] = None,
 ) -> ResponseSchemaModel[PageData[GetLoginLogDetail]]:
-    log_select = await login_log_service.get_select(username=username, status=status, ip=ip)
-    page_data = await paging_data(db, log_select)
+    page_data = await login_log_service.get_list(db=db, username=username, status=status, ip=ip)
+
     return response_base.success(data=page_data)
 
 
@@ -43,8 +41,8 @@ async def get_pagination_login_logs(
         DependsRBAC,
     ],
 )
-async def delete_login_log(pk: Annotated[list[int], Query(description='登录日志 ID 列表')]) -> ResponseModel:
-    count = await login_log_service.delete(pk=pk)
+async def delete_login_logs(db: CurrentSessionTransaction, obj: DeleteLoginLogParam) -> ResponseModel:
+    count = await login_log_service.delete(db=db, obj=obj)
     if count > 0:
         return response_base.success()
     return response_base.fail()
@@ -54,12 +52,10 @@ async def delete_login_log(pk: Annotated[list[int], Query(description='登录日
     '/all',
     summary='清空登录日志',
     dependencies=[
-        Depends(RequestPermission('log:login:empty')),
+        Depends(RequestPermission('log:login:clear')),
         DependsRBAC,
     ],
 )
-async def delete_all_login_logs() -> ResponseModel:
-    count = await login_log_service.delete_all()
-    if count > 0:
-        return response_base.success()
-    return response_base.fail()
+async def delete_all_login_logs(db: CurrentSessionTransaction) -> ResponseModel:
+    await login_log_service.delete_all(db=db)
+    return response_base.success()

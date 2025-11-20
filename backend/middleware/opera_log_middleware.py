@@ -1,6 +1,6 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-from asyncio import create_task
+import time
+
+from asyncio import Queue
 from typing import Any
 
 from asgiref.sync import sync_to_async
@@ -11,17 +11,21 @@ from starlette.requests import Request
 
 from backend.app.admin.schema.opera_log import CreateOperaLogParam
 from backend.app.admin.service.opera_log_service import opera_log_service
-from backend.common.dataclasses import RequestCallNext
+from backend.common.context import ctx
 from backend.common.enums import OperaLogCipherType, StatusType
 from backend.common.log import log
+from backend.common.queue import batch_dequeue
+from backend.common.response.response_code import StandardResponseCode
 from backend.core.conf import settings
+from backend.database.db import async_db_session
 from backend.utils.encrypt import AESCipher, ItsDCipher, Md5Cipher
-from backend.utils.timezone import timezone
 from backend.utils.trace_id import get_request_trace_id
 
 
 class OperaLogMiddleware(BaseHTTPMiddleware):
     """操作日志中间件"""
+
+    opera_log_queue: Queue = Queue(maxsize=100000)
 
     async def dispatch(self, request: Request, call_next: Any) -> Response:
         """
@@ -31,170 +35,179 @@ class OperaLogMiddleware(BaseHTTPMiddleware):
         :param call_next: 下一个中间件或路由处理函数
         :return:
         """
-        # 排除记录白名单
-        path = request.url.path
-        if path in settings.OPERA_LOG_PATH_EXCLUDE or not path.startswith(f'{settings.FASTAPI_API_V1_PATH}'):
-            return await call_next(request)
-
-        # 请求解析
-        try:
-            # 此信息依赖于 jwt 中间件
-            username = request.user.username
-        except AttributeError:
-            username = None
-        method = request.method
-        args = await self.get_request_args(request)
-        args = await self.desensitization(args)
-
-        # 执行请求
-        start_time = timezone.now()
-        request_next = await self.execute_request(request, call_next)
-        end_time = timezone.now()
-        cost_time = round((end_time - start_time).total_seconds() * 1000.0, 3)
-
-        # 此信息只能在请求后获取
-        _route = request.scope.get('route')
-        summary = getattr(_route, 'summary', None) or ''
-
-        # 日志创建
-        opera_log_in = CreateOperaLogParam(
-            trace_id=get_request_trace_id(request),
-            username=username,
-            method=method,
-            title=summary,
-            path=path,
-            ip=request.state.ip,
-            country=request.state.country,
-            region=request.state.region,
-            city=request.state.city,
-            user_agent=request.state.user_agent,
-            os=request.state.os,
-            browser=request.state.browser,
-            device=request.state.device,
-            args=args,
-            status=request_next.status,
-            code=request_next.code,
-            msg=request_next.msg,
-            cost_time=cost_time,
-            opera_time=start_time,
-        )
-        create_task(opera_log_service.create(obj=opera_log_in))  # noqa: ignore
-
-        # 错误抛出
-        if request_next.err:
-            raise request_next.err from None
-
-        return request_next.response
-
-    async def execute_request(self, request: Request, call_next: Any) -> RequestCallNext:
-        """
-        执行请求并处理异常
-
-        :param request: FastAPI 请求对象
-        :param call_next: 下一个中间件或路由处理函数
-        :return:
-        """
-        code = 200
-        msg = 'Success'
-        status = StatusType.enable
-        err = None
         response = None
-        try:
+        path = request.url.path
+
+        if path in settings.OPERA_LOG_PATH_EXCLUDE or not path.startswith(f'{settings.FASTAPI_API_V1_PATH}'):
             response = await call_next(request)
-            code, msg = self.request_exception_handler(request, code, msg)
-        except Exception as e:
-            log.error(f'请求异常: {str(e)}')
-            # code 处理包含 SQLAlchemy 和 Pydantic
-            code = getattr(e, 'code', code)
-            msg = getattr(e, 'msg', msg)
-            status = StatusType.disable
-            err = e
+        else:
+            method = request.method
+            args = await self.get_request_args(request)
 
-        return RequestCallNext(code=str(code), msg=msg, status=status, err=err, response=response)
+            # 执行请求
+            code = 200
+            msg = 'Success'
+            status = StatusType.enable
+            error = None
+            try:
+                response = await call_next(request)
+                elapsed = round((time.perf_counter() - ctx.perf_time) * 1000, 3)
+                for e in [
+                    '__request_http_exception__',
+                    '__request_validation_exception__',
+                    '__request_assertion_error__',
+                    '__request_custom_exception__',
+                ]:
+                    exception = ctx.get(e)
+                    if exception:
+                        code = exception.get('code')
+                        msg = exception.get('msg')
+                        log.error(f'请求异常: {msg}')
+                        break
+            except Exception as e:
+                elapsed = round((time.perf_counter() - ctx.perf_time) * 1000, 3)
+                code = getattr(e, 'code', StandardResponseCode.HTTP_500)  # 兼容 SQLAlchemy 异常用法
+                msg = getattr(e, 'msg', str(e))  # 不建议使用 traceback 模块获取错误信息，会暴漏代码信息
+                status = StatusType.disable
+                error = e
+                log.error(f'请求异常: {e!s}')
 
-    @staticmethod
-    def request_exception_handler(request: Request, code: int, msg: str) -> tuple[str, str]:
-        """
-        请求异常处理器
+            # 此信息只能在请求后获取
+            route = request.scope.get('route')
+            summary = route.summary or '' if route else ''
 
-        :param request: FastAPI 请求对象
-        :param code: 错误码
-        :param msg: 错误信息
-        :return:
-        """
-        exception_states = [
-            '__request_http_exception__',
-            '__request_validation_exception__',
-            '__request_assertion_error__',
-            '__request_custom_exception__',
-            '__request_all_unknown_exception__',
-            '__request_cors_500_exception__',
-        ]
-        for state in exception_states:
-            exception = getattr(request.state, state, None)
-            if exception:
-                code = exception.get('code')
-                msg = exception.get('msg')
-                log.error(f'请求异常: {msg}')
-                break
-        return code, msg
+            try:
+                # 此信息来源于 JWT 认证中间件
+                username = request.user.username
+            except AttributeError:
+                username = None
 
-    @staticmethod
-    async def get_request_args(request: Request) -> dict[str, Any]:
+            # 日志记录
+            log.debug(f'接口摘要：[{summary}]')
+            log.debug(f'请求地址：[{ctx.ip}]')
+            log.debug(f'请求参数：{args}')
+            log.info(f'{request.client.host: <15} | {request.method: <8} | {code!s: <6} | {path} | {elapsed:.3f}ms')
+            if request.method != 'OPTIONS':
+                log.debug('<-- 请求结束')
+
+            # 日志创建
+            opera_log_in = CreateOperaLogParam(
+                trace_id=get_request_trace_id(),
+                username=username,
+                method=method,
+                title=summary,
+                path=path,
+                ip=ctx.ip,
+                country=ctx.country,
+                region=ctx.region,
+                city=ctx.city,
+                user_agent=ctx.user_agent,
+                os=ctx.os,
+                browser=ctx.browser,
+                device=ctx.device,
+                args=args,
+                status=status,
+                code=str(code),
+                msg=msg,
+                cost_time=elapsed,  # 可能和日志存在微小差异（可忽略）
+                opera_time=ctx.start_time,
+            )
+            await self.opera_log_queue.put(opera_log_in)
+
+            # 错误抛出
+            if error:
+                raise error from None
+
+        return response
+
+    async def get_request_args(self, request: Request) -> dict[str, Any] | None:
         """
         获取请求参数
 
         :param request: FastAPI 请求对象
         :return:
         """
-        args = dict(request.query_params)
-        args.update(request.path_params)
+        args = {}
+
+        # 查询参数
+        query_params = dict(request.query_params)
+        if query_params:
+            args['query_params'] = await self.desensitization(query_params)
+
+        # 路径参数
+        path_params = request.path_params
+        if path_params:
+            args['path_params'] = await self.desensitization(path_params)
+
         # Tip: .body() 必须在 .form() 之前获取
         # https://github.com/encode/starlette/discussions/1933
+        content_type = request.headers.get('Content-Type', '').split(';')
+
+        # 请求体
         body_data = await request.body()
-        form_data = await request.form()
-        if len(form_data) > 0:
-            args.update({k: v.filename if isinstance(v, UploadFile) else v for k, v in form_data.items()})
-        elif body_data:
-            content_type = request.headers.get('Content-Type', '').split(';')
-            if 'application/json' in content_type:
+        if body_data:
+            # 注意：非 json 数据默认使用 data 作为键
+            if 'application/json' not in content_type:
+                args['data'] = str(body_data)
+            else:
                 json_data = await request.json()
                 if isinstance(json_data, dict):
-                    args.update(json_data)
+                    args['json'] = await self.desensitization(json_data)
                 else:
-                    # 注意：非字典数据默认使用 body 作为键
-                    args.update({'body': str(body_data)})
+                    args['data'] = str(body_data)
+
+        # 表单参数
+        form_data = await request.form()
+        if len(form_data) > 0:
+            for k, v in form_data.items():
+                form_data = {k: v.filename} if isinstance(v, UploadFile) else {k: v}
+            if 'multipart/form-data' not in content_type:
+                args['x-www-form-urlencoded'] = await self.desensitization(form_data)
             else:
-                args.update({'body': str(body_data)})
-        return args
+                args['form-data'] = await self.desensitization(form_data)
+
+        return args or None
 
     @staticmethod
     @sync_to_async
-    def desensitization(args: dict[str, Any]) -> dict[str, Any] | None:
+    def desensitization(args: dict[str, Any]) -> dict[str, Any]:
         """
         脱敏处理
 
         :param args: 需要脱敏的参数字典
         :return:
         """
-        if not args:
-            return None
-
-        encrypt_type = settings.OPERA_LOG_ENCRYPT_TYPE
-        encrypt_key_include = settings.OPERA_LOG_ENCRYPT_KEY_INCLUDE
-        encrypt_secret_key = settings.OPERA_LOG_ENCRYPT_SECRET_KEY
-
         for key, value in args.items():
-            if key in encrypt_key_include:
-                match encrypt_type:
+            if key in settings.OPERA_LOG_ENCRYPT_KEY_INCLUDE:
+                match settings.OPERA_LOG_ENCRYPT_TYPE:
                     case OperaLogCipherType.aes:
-                        args[key] = (AESCipher(encrypt_secret_key).encrypt(value)).hex()
+                        args[key] = (AESCipher(settings.OPERA_LOG_ENCRYPT_SECRET_KEY).encrypt(value)).hex()
                     case OperaLogCipherType.md5:
                         args[key] = Md5Cipher.encrypt(value)
                     case OperaLogCipherType.itsdangerous:
-                        args[key] = ItsDCipher(encrypt_secret_key).encrypt(value)
+                        args[key] = ItsDCipher(settings.OPERA_LOG_ENCRYPT_SECRET_KEY).encrypt(value)
                     case OperaLogCipherType.plan:
                         pass
                     case _:
                         args[key] = '******'
+
         return args
+
+    @classmethod
+    async def consumer(cls) -> None:
+        """操作日志消费者"""
+        while True:
+            logs = await batch_dequeue(
+                cls.opera_log_queue,
+                max_items=settings.OPERA_LOG_QUEUE_BATCH_CONSUME_SIZE,
+                timeout=settings.OPERA_LOG_QUEUE_TIMEOUT,
+            )
+            if logs:
+                try:
+                    if settings.DATABASE_ECHO:
+                        log.info('自动执行【操作日志批量创建】任务...')
+                    async with async_db_session.begin() as db:
+                        await opera_log_service.bulk_create(db=db, objs=logs)
+                finally:
+                    if not cls.opera_log_queue.empty():
+                        cls.opera_log_queue.task_done()

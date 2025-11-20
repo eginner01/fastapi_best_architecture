@@ -1,35 +1,39 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-from sqlalchemy import INT, Column, ForeignKey, Integer, Table
+import sqlalchemy as sa
 
 from backend.common.model import MappedBase
 
-sys_user_role = Table(
+# 用户角色表
+user_role = sa.Table(
     'sys_user_role',
     MappedBase.metadata,
-    Column('id', INT, primary_key=True, unique=True, index=True, autoincrement=True, comment='主键ID'),
-    Column('user_id', Integer, ForeignKey('sys_user.id', ondelete='CASCADE'), primary_key=True, comment='用户ID'),
-    Column('role_id', Integer, ForeignKey('sys_role.id', ondelete='CASCADE'), primary_key=True, comment='角色ID'),
+    sa.Column('id', sa.BigInteger, primary_key=True, unique=True, index=True, autoincrement=True, comment='主键ID'),
+    sa.Column('user_id', sa.BigInteger, primary_key=True, comment='用户ID'),
+    sa.Column('role_id', sa.BigInteger, primary_key=True, comment='角色ID'),
 )
 
-sys_role_menu = Table(
+# 角色菜单表
+role_menu = sa.Table(
     'sys_role_menu',
     MappedBase.metadata,
-    Column('id', INT, primary_key=True, unique=True, index=True, autoincrement=True, comment='主键ID'),
-    Column('role_id', Integer, ForeignKey('sys_role.id', ondelete='CASCADE'), primary_key=True, comment='角色ID'),
-    Column('menu_id', Integer, ForeignKey('sys_menu.id', ondelete='CASCADE'), primary_key=True, comment='菜单ID'),
+    sa.Column('id', sa.BigInteger, primary_key=True, unique=True, index=True, autoincrement=True, comment='主键ID'),
+    sa.Column('role_id', sa.BigInteger, primary_key=True, comment='角色ID'),
+    sa.Column('menu_id', sa.BigInteger, primary_key=True, comment='菜单ID'),
 )
 
-sys_role_data_rule = Table(
-    'sys_role_data_rule',
+# 角色数据范围表
+role_data_scope = sa.Table(
+    'sys_role_data_scope',
     MappedBase.metadata,
-    Column('id', INT, primary_key=True, unique=True, index=True, autoincrement=True, comment='主键ID'),
-    Column('role_id', Integer, ForeignKey('sys_role.id', ondelete='CASCADE'), primary_key=True, comment='角色ID'),
-    Column(
-        'data_rule_id',
-        Integer,
-        ForeignKey('sys_data_rule.id', ondelete='CASCADE'),
-        primary_key=True,
-        comment='数据权限规则ID',
-    ),
+    sa.Column('id', sa.BigInteger, primary_key=True, unique=True, index=True, autoincrement=True, comment='主键 ID'),
+    sa.Column('role_id', sa.BigInteger, primary_key=True, comment='角色 ID'),
+    sa.Column('data_scope_id', sa.BigInteger, primary_key=True, comment='数据范围 ID'),
+)
+
+# 数据范围规则表
+data_scope_rule = sa.Table(
+    'sys_data_scope_rule',
+    MappedBase.metadata,
+    sa.Column('id', sa.BigInteger, primary_key=True, unique=True, index=True, autoincrement=True, comment='主键ID'),
+    sa.Column('data_scope_id', sa.BigInteger, primary_key=True, comment='数据范围 ID'),
+    sa.Column('data_rule_id', sa.BigInteger, primary_key=True, comment='数据规则 ID'),
 )

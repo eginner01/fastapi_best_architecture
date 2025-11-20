@@ -1,6 +1,4 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-from typing import Sequence
+from collections.abc import Sequence
 
 from sqlalchemy import Select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,9 +21,25 @@ class CRUDNotice(CRUDPlus[Notice]):
         """
         return await self.select_model(db, pk)
 
-    async def get_list(self) -> Select:
-        """获取通知公告列表"""
-        return await self.select_order('created_time', 'desc')
+    async def get_select(self, title: str, type: int | None, status: int | None) -> Select:
+        """
+        获取通知公告列表查询表达式
+
+        :param title: 通知公告标题
+        :param type: 通知公告类型
+        :param status: 通知公告状态
+        :return:
+        """
+        filters = {}
+
+        if title is not None:
+            filters['title__like'] = f'%{title}%'
+        if type is not None:
+            filters['type'] = type
+        if status is not None:
+            filters['status'] = status
+
+        return await self.select_order('created_time', 'desc', **filters)
 
     async def get_all(self, db: AsyncSession) -> Sequence[Notice]:
         """
@@ -57,15 +71,15 @@ class CRUDNotice(CRUDPlus[Notice]):
         """
         return await self.update_model(db, pk, obj)
 
-    async def delete(self, db: AsyncSession, pk: list[int]) -> int:
+    async def delete(self, db: AsyncSession, pks: list[int]) -> int:
         """
-        删除通知公告
+        批量删除通知公告
 
         :param db: 数据库会话
-        :param pk: 通知公告 ID 列表
+        :param pks: 通知公告 ID 列表
         :return:
         """
-        return await self.delete_model_by_column(db, allow_multiple=True, id__in=pk)
+        return await self.delete_model_by_column(db, allow_multiple=True, id__in=pks)
 
 
 notice_dao: CRUDNotice = CRUDNotice(Notice)

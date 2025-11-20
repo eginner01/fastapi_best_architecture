@@ -1,14 +1,15 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
+import time
+
 from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 
+from backend.common.context import ctx
 from backend.common.log import log
 from backend.utils.timezone import timezone
 
 
 class AccessMiddleware(BaseHTTPMiddleware):
-    """请求日志中间件"""
+    """访问日志中间件"""
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         """
@@ -18,11 +19,17 @@ class AccessMiddleware(BaseHTTPMiddleware):
         :param call_next: 下一个中间件或路由处理函数
         :return:
         """
+        path = request.url.path if not request.url.query else request.url.path + '/' + request.url.query
+
+        if request.method != 'OPTIONS':
+            log.debug(f'--> 请求开始[{path}]')
+
+        perf_time = time.perf_counter()
+        ctx.perf_time = perf_time
+
         start_time = timezone.now()
+        ctx.start_time = start_time
+
         response = await call_next(request)
-        end_time = timezone.now()
-        log.info(
-            f'{request.client.host: <15} | {request.method: <8} | {response.status_code: <6} | '
-            f'{request.url.path} | {round((end_time - start_time).total_seconds(), 3) * 1000.0}ms'
-        )
+
         return response

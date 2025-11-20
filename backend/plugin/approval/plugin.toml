@@ -1,0 +1,11 @@
+[plugin]
+summary = "审批流系统"
+version = "1.0.0"
+description = "支持多级审批、会签/或签、条件分支的审批流系统"
+author = "Albert"
+
+[app]
+router = ["v1"]
+
+[requirements]
+python = ">=3.10"

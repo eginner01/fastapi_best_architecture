@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 from datetime import datetime
 
 from pydantic import ConfigDict, Field
@@ -14,8 +12,8 @@ class DataRuleSchemaBase(SchemaBase):
     name: str = Field(description='规则名称')
     model: str = Field(description='模型名称')
     column: str = Field(description='字段名称')
-    operator: RoleDataRuleOperatorType = Field(RoleDataRuleOperatorType.OR, description='操作符（AND/OR）')
-    expression: RoleDataRuleExpressionType = Field(RoleDataRuleExpressionType.eq, description='表达式类型')
+    operator: RoleDataRuleOperatorType = Field(description='操作符（AND/OR）')
+    expression: RoleDataRuleExpressionType = Field(description='表达式类型')
     value: str = Field(description='规则值')
 
 
@@ -27,15 +25,24 @@ class UpdateDataRuleParam(DataRuleSchemaBase):
     """更新数据规则参数"""
 
 
+class DeleteDataRuleParam(SchemaBase):
+    """删除数据规则参数"""
+
+    pks: list[int] = Field(description='规则 ID 列表')
+
+
 class GetDataRuleDetail(DataRuleSchemaBase):
     """数据规则详情"""
 
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, frozen=True)
 
     id: int = Field(description='规则 ID')
     created_time: datetime = Field(description='创建时间')
     updated_time: datetime | None = Field(None, description='更新时间')
 
-    def __hash__(self) -> int:
-        """计算哈希值"""
-        return hash(self.name)
+
+class GetDataRuleColumnDetail(SchemaBase):
+    """数据规则可用模型字段详情"""
+
+    key: str = Field(description='字段名')
+    comment: str = Field(description='字段评论')

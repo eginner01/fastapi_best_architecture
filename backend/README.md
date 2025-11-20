@@ -50,10 +50,10 @@
 
 4. Format and Lint
 
-   Auto-formatting and lint via `pre-commit`
+   Auto-formatting and lint via `prek`
 
    ```shell
-   pre-commit run --all-files
+   prek run --all-files
    ```
 
 5. Commit and push
@@ -72,12 +72,12 @@
 >
 > It is recommended to execute under the backend directory, and chmod authorization may be required
 
-- `pre_start.sh`: Perform automatic database migration and create database tables
+- `pre_start.sh`: Perform automatic database migration
 
 - `celery-start.sh`: For celery docker script, implementation is not recommended
 
 - `scripts/format.sh`: Perform ruff format check
 
-- `scripts/lint.sh`: Perform pre-commit formatting
+- `scripts/lint.sh`: Perform prek formatting
 
 - `scripts/export.sh`: Execute uv export dependency package

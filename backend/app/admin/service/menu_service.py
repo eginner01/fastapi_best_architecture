@@ -1,146 +1,136 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 from typing import Any
 
 from fastapi import Request
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.admin.crud.crud_menu import menu_dao
-from backend.app.admin.crud.crud_role import role_dao
 from backend.app.admin.model import Menu
 from backend.app.admin.schema.menu import CreateMenuParam, UpdateMenuParam
+from backend.app.admin.utils.cache import user_cache_manager
 from backend.common.exception import errors
-from backend.core.conf import settings
-from backend.database.db import async_db_session
-from backend.database.redis import redis_client
-from backend.utils.build_tree import get_tree_data
+from backend.utils.build_tree import get_tree_data, get_vben5_tree_data
 
 
 class MenuService:
     """菜单服务类"""
 
     @staticmethod
-    async def get(*, pk: int) -> Menu:
+    async def get(*, db: AsyncSession, pk: int) -> Menu:
         """
         获取菜单详情
 
+        :param db: 数据库会话
         :param pk: 菜单 ID
         :return:
         """
-        async with async_db_session() as db:
-            menu = await menu_dao.get(db, menu_id=pk)
-            if not menu:
-                raise errors.NotFoundError(msg='菜单不存在')
-            return menu
+
+        menu = await menu_dao.get(db, menu_id=pk)
+        if not menu:
+            raise errors.NotFoundError(msg='菜单不存在')
+        return menu
 
     @staticmethod
-    async def get_menu_tree(*, title: str | None = None, status: int | None = None) -> list[dict[str, Any]]:
+    async def get_tree(*, db: AsyncSession, title: str | None, status: int | None) -> list[dict[str, Any]]:
         """
         获取菜单树形结构
 
+        :param db: 数据库会话
         :param title: 菜单标题
         :param status: 状态
         :return:
         """
-        async with async_db_session() as db:
-            menu_select = await menu_dao.get_all(db, title=title, status=status)
-            menu_tree = get_tree_data(menu_select)
-            return menu_tree
+
+        menu_data = await menu_dao.get_all(db, title=title, status=status)
+        menu_tree = get_tree_data(menu_data)
+        return menu_tree
 
     @staticmethod
-    async def get_role_menu_tree(*, pk: int) -> list[dict[str, Any]]:
+    async def get_sidebar(*, db: AsyncSession, request: Request) -> list[dict[str, Any] | None]:
         """
-        获取角色的菜单树形结构
+        获取用户的菜单侧边栏
 
-        :param pk: 角色 ID
-        :return:
-        """
-        async with async_db_session() as db:
-            role = await role_dao.get_with_relation(db, pk)
-            if not role:
-                raise errors.NotFoundError(msg='角色不存在')
-            menu_ids = [menu.id for menu in role.menus]
-            menu_select = await menu_dao.get_role_menus(db, False, menu_ids)
-            menu_tree = get_tree_data(menu_select)
-            return menu_tree
-
-    @staticmethod
-    async def get_user_menu_tree(*, request: Request) -> list[dict[str, Any]]:
-        """
-        获取用户的菜单树形结构
-
+        :param db: 数据库会话
         :param request: FastAPI 请求对象
         :return:
         """
-        async with async_db_session() as db:
+        menu_data = None
+        if request.user.is_superuser:
+            menu_data = await menu_dao.get_sidebar(db, None)
+        else:
             roles = request.user.roles
-            menu_ids = []
-            menu_tree = []
+            menu_ids = set()
             if roles:
                 for role in roles:
-                    menu_ids.extend([menu.id for menu in role.menus])
-                menu_select = await menu_dao.get_role_menus(db, request.user.is_superuser, menu_ids)
-                menu_tree = get_tree_data(menu_select)
-            return menu_tree
+                    menu_ids.update(menu.id for menu in role.menus)
+                menu_data = await menu_dao.get_sidebar(db, list(menu_ids))
+
+        if menu_data:
+            return get_vben5_tree_data(menu_data)
+
+        return []
 
     @staticmethod
-    async def create(*, obj: CreateMenuParam) -> None:
+    async def create(*, db: AsyncSession, obj: CreateMenuParam) -> None:
         """
         创建菜单
 
+        :param db: 数据库会话
         :param obj: 菜单创建参数
         :return:
         """
-        async with async_db_session.begin() as db:
-            title = await menu_dao.get_by_title(db, obj.title)
-            if title:
-                raise errors.ForbiddenError(msg='菜单标题已存在')
-            if obj.parent_id:
-                parent_menu = await menu_dao.get(db, obj.parent_id)
-                if not parent_menu:
-                    raise errors.NotFoundError(msg='父级菜单不存在')
-            await menu_dao.create(db, obj)
+
+        title = await menu_dao.get_by_title(db, obj.title)
+        if title:
+            raise errors.ConflictError(msg='菜单标题已存在')
+        if obj.parent_id:
+            parent_menu = await menu_dao.get(db, obj.parent_id)
+            if not parent_menu:
+                raise errors.NotFoundError(msg='父级菜单不存在')
+        await menu_dao.create(db, obj)
 
     @staticmethod
-    async def update(*, pk: int, obj: UpdateMenuParam) -> int:
+    async def update(*, db: AsyncSession, pk: int, obj: UpdateMenuParam) -> int:
         """
         更新菜单
 
+        :param db: 数据库会话
         :param pk: 菜单 ID
         :param obj: 菜单更新参数
         :return:
         """
-        async with async_db_session.begin() as db:
-            menu = await menu_dao.get(db, pk)
-            if not menu:
-                raise errors.NotFoundError(msg='菜单不存在')
-            if menu.title != obj.title:
-                if await menu_dao.get_by_title(db, obj.title):
-                    raise errors.ForbiddenError(msg='菜单标题已存在')
-            if obj.parent_id:
-                parent_menu = await menu_dao.get(db, obj.parent_id)
-                if not parent_menu:
-                    raise errors.NotFoundError(msg='父级菜单不存在')
-            if obj.parent_id == menu.id:
-                raise errors.ForbiddenError(msg='禁止关联自身为父级')
-            count = await menu_dao.update(db, pk, obj)
-            return count
+
+        menu = await menu_dao.get(db, pk)
+        if not menu:
+            raise errors.NotFoundError(msg='菜单不存在')
+        if menu.title != obj.title and await menu_dao.get_by_title(db, obj.title):
+            raise errors.ConflictError(msg='菜单标题已存在')
+        if obj.parent_id:
+            parent_menu = await menu_dao.get(db, obj.parent_id)
+            if not parent_menu:
+                raise errors.NotFoundError(msg='父级菜单不存在')
+        if obj.parent_id == menu.id:
+            raise errors.ForbiddenError(msg='禁止关联自身为父级')
+        count = await menu_dao.update(db, pk, obj)
+        await user_cache_manager.clear_by_menu_id(db, [pk])
+        return count
 
     @staticmethod
-    async def delete(*, request: Request, pk: int) -> int:
+    async def delete(*, db: AsyncSession, pk: int) -> int:
         """
         删除菜单
 
-        :param request: FastAPI 请求对象
+        :param db: 数据库会话
         :param pk: 菜单 ID
         :return:
         """
-        async with async_db_session.begin() as db:
-            children = await menu_dao.get_children(db, pk)
-            if children:
-                raise errors.ForbiddenError(msg='菜单下存在子菜单，无法删除')
-            count = await menu_dao.delete(db, pk)
-            await redis_client.delete(f'{settings.JWT_USER_REDIS_PREFIX}:{request.user.id}')
-            return count
+
+        children = await menu_dao.get_children(db, pk)
+        if children:
+            raise errors.ConflictError(msg='菜单下存在子菜单，无法删除')
+        count = await menu_dao.delete(db, pk)
+        if count:
+            await user_cache_manager.clear_by_menu_id(db, [pk])
+        return count
 
 
 menu_service: MenuService = MenuService()

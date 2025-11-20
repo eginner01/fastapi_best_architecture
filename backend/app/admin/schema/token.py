@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 from datetime import datetime
 
 from pydantic import Field
@@ -33,12 +31,6 @@ class GetLoginToken(AccessTokenBase):
     """获取登录令牌"""
 
     user: GetUserInfoDetail = Field(description='用户信息')
-
-
-class KickOutToken(SchemaBase):
-    """踢出令牌"""
-
-    session_uuid: str = Field(description='会话 UUID')
 
 
 class GetTokenDetail(SchemaBase):

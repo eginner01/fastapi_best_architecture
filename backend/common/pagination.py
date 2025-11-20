@@ -1,20 +1,20 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from collections.abc import Sequence
 from math import ceil
-from typing import TYPE_CHECKING, Any, Generic, Sequence, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
 from fastapi import Depends, Query
 from fastapi_pagination import pagination_ctx
 from fastapi_pagination.bases import AbstractPage, AbstractParams, RawParams
-from fastapi_pagination.ext.sqlalchemy import paginate
+from fastapi_pagination.ext.sqlalchemy import apaginate
 from fastapi_pagination.links.bases import create_links
 from pydantic import BaseModel, Field
 
 if TYPE_CHECKING:
     from sqlalchemy import Select
     from sqlalchemy.ext.asyncio import AsyncSession
+    from typing_extensions import Self
 
 T = TypeVar('T')
 SchemaT = TypeVar('SchemaT')
@@ -24,7 +24,7 @@ class _CustomPageParams(BaseModel, AbstractParams):
     """自定义分页参数"""
 
     page: int = Query(1, ge=1, description='页码')
-    size: int = Query(20, gt=0, le=100, description='每页数量')
+    size: int = Query(20, gt=0, le=200, description='每页数量')
 
     def to_raw_params(self) -> RawParams:
         return RawParams(
@@ -63,9 +63,9 @@ class _CustomPage(_PageDetails, AbstractPage[T], Generic[T]):
     def create(
         cls,
         items: list,
-        total: int,
         params: _CustomPageParams,
-    ) -> _CustomPage[T]:
+        total: int = 0,
+    ) -> Self:
         page = params.page
         size = params.size
         total_pages = ceil(total / size)
@@ -82,7 +82,7 @@ class _CustomPage(_PageDetails, AbstractPage[T], Generic[T]):
             page=page,
             size=size,
             total_pages=total_pages,
-            links=links,  # type: ignore
+            links=links,
         )
 
 
@@ -111,15 +111,16 @@ class PageData(_PageDetails, Generic[SchemaT]):
     items: Sequence[SchemaT]
 
 
-async def paging_data(db: AsyncSession, select: Select) -> dict[str, Any]:
+async def paging_data(db: AsyncSession, select: Select, **kwargs) -> dict[str, Any]:
     """
     基于 SQLAlchemy 创建分页数据
 
     :param db: 数据库会话
     :param select: SQL 查询语句
+    :param kwargs: 更多 fastapi-pagination apaginate 参数
     :return:
     """
-    paginated_data: _CustomPage = await paginate(db, select)
+    paginated_data: _CustomPage = await apaginate(db, select, **kwargs)
     page_data = paginated_data.model_dump()
     return page_data
 

@@ -1,45 +1,21 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-from typing import Any
+import os
 
 import celery
 import celery_aio_pool
 
-from backend.app.task.conf import task_settings
+from backend.app.task.tasks.beat import LOCAL_BEAT_SCHEDULE
 from backend.core.conf import settings
-
-__all__ = ['celery_app']
-
-
-def get_broker_url() -> str:
-    """获取消息代理 URL"""
-    if task_settings.CELERY_BROKER == 'redis':
-        return (
-            f'redis://:{settings.REDIS_PASSWORD}@{settings.REDIS_HOST}:'
-            f'{settings.REDIS_PORT}/{task_settings.CELERY_BROKER_REDIS_DATABASE}'
-        )
-    return (
-        f'amqp://{task_settings.RABBITMQ_USERNAME}:{task_settings.RABBITMQ_PASSWORD}@'
-        f'{task_settings.RABBITMQ_HOST}:{task_settings.RABBITMQ_PORT}'
-    )
+from backend.core.path_conf import BASE_PATH
 
 
-def get_result_backend() -> str:
-    """获取结果后端 URL"""
-    return (
-        f'redis://:{settings.REDIS_PASSWORD}@{settings.REDIS_HOST}:'
-        f'{settings.REDIS_PORT}/{task_settings.CELERY_BACKEND_REDIS_DATABASE}'
-    )
-
-
-def get_result_backend_transport_options() -> dict[str, Any]:
-    """获取结果后端传输选项"""
-    return {
-        'global_keyprefix': task_settings.CELERY_BACKEND_REDIS_PREFIX,
-        'retry_policy': {
-            'timeout': task_settings.CELERY_BACKEND_REDIS_TIMEOUT,
-        },
-    }
+def find_task_packages() -> list[str]:
+    packages = []
+    task_dir = BASE_PATH / 'app' / 'task' / 'tasks'
+    for root, _dirs, files in os.walk(task_dir):
+        if 'tasks.py' in files:
+            package = root.replace(str(BASE_PATH.parent) + os.path.sep, '').replace(os.path.sep, '.')
+            packages.append(package)
+    return packages
 
 
 def init_celery() -> celery.Celery:
@@ -51,21 +27,39 @@ def init_celery() -> celery.Celery:
     celery.app.trace.build_tracer = celery_aio_pool.build_async_tracer
     celery.app.trace.reset_worker_optimizations()
 
+    broker_url = f'amqp://{settings.CELERY_RABBITMQ_USERNAME}:{settings.CELERY_RABBITMQ_PASSWORD}@{settings.CELERY_RABBITMQ_HOST}:{settings.CELERY_RABBITMQ_PORT}/{settings.CELERY_RABBITMQ_VHOST}'
+    if settings.CELERY_BROKER == 'redis':
+        broker_url = f'redis://:{settings.REDIS_PASSWORD}@{settings.REDIS_HOST}:{settings.REDIS_PORT}/{settings.CELERY_BROKER_REDIS_DATABASE}'
+
+    result_backend = f'db+postgresql+psycopg://{settings.DATABASE_USER}:{settings.DATABASE_PASSWORD}@{settings.DATABASE_HOST}:{settings.DATABASE_PORT}/{settings.DATABASE_SCHEMA}'
+    if settings.DATABASE_TYPE == 'mysql':
+        result_backend = result_backend.replace('postgresql+psycopg', 'mysql+pymysql')
+
+    # https://docs.celeryq.dev/en/stable/userguide/configuration.html
     app = celery.Celery(
         'fba_celery',
+        broker_url=broker_url,
+        broker_connection_retry_on_startup=True,
+        result_backend=result_backend,
+        result_extended=True,
+        database_engine_options={'echo': settings.DATABASE_ECHO},
+        # result_expires=0,
+        # beat_sync_every=1,
+        beat_schedule=LOCAL_BEAT_SCHEDULE,
+        beat_scheduler='backend.app.task.utils.schedulers:DatabaseScheduler',
+        task_cls='backend.app.task.tasks.base:TaskBase',
+        task_track_started=True,
         enable_utc=False,
         timezone=settings.DATETIME_TIMEZONE,
-        beat_schedule=task_settings.CELERY_SCHEDULE,
-        broker_url=get_broker_url(),
-        broker_connection_retry_on_startup=True,
-        result_backend=get_result_backend(),
-        result_backend_transport_options=get_result_backend_transport_options(),
-        task_cls='app.task.celery_task.base:TaskBase',
-        task_track_started=True,
     )
 
+    # 在 Celery 中设置此参数无效
+    # 参数：https://github.com/celery/celery/issues/7270
+    app.loader.override_backends = {'db': 'backend.app.task.database:DatabaseBackend'}
+
     # 自动发现任务
-    app.autodiscover_tasks(task_settings.CELERY_TASK_PACKAGES)
+    packages = find_task_packages()
+    app.autodiscover_tasks(packages)
 
     return app
 

@@ -1,9 +1,6 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-# ruff: noqa: F403, F401, I001, RUF100
 import asyncio
 import os
-import sys
+
 from logging.config import fileConfig
 
 from alembic import context
@@ -11,23 +8,16 @@ from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
-sys.path.append('../')
-
+from backend.app import get_app_models
 from backend.common.model import MappedBase
 from backend.core import path_conf
 from backend.database.db import SQLALCHEMY_DATABASE_URL
 from backend.plugin.tools import get_plugin_models
 
-# import your new model here
-from backend.app.admin.model import *  # noqa: F401
-from backend.app.generator.model import *  # noqa: F401
-
-# import plugin model
-for cls in get_plugin_models():
+# import models
+for cls in get_app_models() + get_plugin_models():
     class_name = cls.__name__
-    if class_name in globals():
-        print(f'\nWarning: Class "{class_name}" already exists in global namespace.')
-    else:
+    if class_name not in globals():
         globals()[class_name] = cls
 
 if not os.path.exists(path_conf.ALEMBIC_VERSION_DIR):
@@ -47,10 +37,13 @@ if alembic_config.config_file_name is not None:
 target_metadata = MappedBase.metadata
 
 # other values from the config, defined by the needs of env.py,
-alembic_config.set_main_option('sqlalchemy.url', SQLALCHEMY_DATABASE_URL.render_as_string(hide_password=False))
+alembic_config.set_main_option(
+    'sqlalchemy.url',
+    SQLALCHEMY_DATABASE_URL.render_as_string(hide_password=False).replace('%', '%%'),
+)
 
 
-def run_migrations_offline():
+def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode.
 
     This configures the context with just a URL
@@ -79,7 +72,7 @@ def run_migrations_offline():
 
 def do_run_migrations(connection: Connection) -> None:
     # 当迁移无变化时，不生成迁移记录
-    def process_revision_directives(context, revision, directives):
+    def process_revision_directives(context, revision, directives) -> None:  # noqa: ANN001
         if alembic_config.cmd_opts.autogenerate:
             script = directives[0]
             if script.upgrade_ops.is_empty():

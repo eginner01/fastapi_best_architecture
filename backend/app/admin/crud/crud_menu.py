@@ -1,13 +1,11 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-from typing import Sequence
+from collections.abc import Sequence
 
-from sqlalchemy import and_, asc, select
+from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 from sqlalchemy_crud_plus import CRUDPlus
 
 from backend.app.admin.model import Menu
+from backend.app.admin.model.m2m import role_menu
 from backend.app.admin.schema.menu import CreateMenuParam, UpdateMenuParam
 
 
@@ -32,9 +30,9 @@ class CRUDMenu(CRUDPlus[Menu]):
         :param title: 菜单标题
         :return:
         """
-        return await self.select_model_by_column(db, title=title, menu_type__ne=2)
+        return await self.select_model_by_column(db, title=title, type__ne=2)
 
-    async def get_all(self, db: AsyncSession, title: str | None = None, status: int | None = None) -> Sequence[Menu]:
+    async def get_all(self, db: AsyncSession, title: str | None, status: int | None) -> Sequence[Menu]:
         """
         获取菜单列表
 
@@ -44,28 +42,28 @@ class CRUDMenu(CRUDPlus[Menu]):
         :return:
         """
         filters = {}
+
         if title is not None:
-            filters.update(title=f'%{title}%')
+            filters['title__like'] = f'%{title}%'
         if status is not None:
-            filters.update(status=status)
+            filters['status'] = status
+
         return await self.select_models_order(db, 'sort', **filters)
 
-    async def get_role_menus(self, db: AsyncSession, superuser: bool, menu_ids: list[int]) -> Sequence[Menu]:
+    async def get_sidebar(self, db: AsyncSession, menu_ids: list[int] | None) -> Sequence[Menu]:
         """
-        获取角色菜单列表
+        获取用户的菜单侧边栏
 
         :param db: 数据库会话
-        :param superuser: 是否超级管理员
         :param menu_ids: 菜单 ID 列表
         :return:
         """
-        stmt = select(self.model).order_by(asc(self.model.sort))
-        filters = [self.model.menu_type.in_([0, 1])]
-        if not superuser:
-            filters.append(self.model.id.in_(menu_ids))
-        stmt = stmt.where(and_(*filters))
-        menu = await db.execute(stmt)
-        return menu.scalars().all()
+        filters = {'type__in': [0, 1, 3, 4]}
+
+        if menu_ids:
+            filters['id__in'] = menu_ids
+
+        return await self.select_models_order(db, 'sort', 'asc', **filters)
 
     async def create(self, db: AsyncSession, obj: CreateMenuParam) -> None:
         """
@@ -96,9 +94,12 @@ class CRUDMenu(CRUDPlus[Menu]):
         :param menu_id: 菜单 ID
         :return:
         """
+        role_menu_stmt = delete(role_menu).where(role_menu.c.menu_id == menu_id)
+        await db.execute(role_menu_stmt)
+
         return await self.delete_model(db, menu_id)
 
-    async def get_children(self, db: AsyncSession, menu_id: int) -> list[Menu | None]:
+    async def get_children(self, db: AsyncSession, menu_id: int) -> Sequence[Menu | None]:
         """
         获取子菜单列表
 
@@ -106,10 +107,7 @@ class CRUDMenu(CRUDPlus[Menu]):
         :param menu_id: 菜单 ID
         :return:
         """
-        stmt = select(self.model).options(selectinload(self.model.children)).where(self.model.id == menu_id)
-        result = await db.execute(stmt)
-        menu = result.scalars().first()
-        return menu.children
+        return await self.select_models(db, parent_id=menu_id)
 
 
 menu_dao: CRUDMenu = CRUDMenu(Menu)

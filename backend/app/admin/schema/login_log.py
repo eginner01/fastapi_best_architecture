@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 from datetime import datetime
 
 from pydantic import ConfigDict, Field
@@ -31,6 +29,12 @@ class CreateLoginLogParam(LoginLogSchemaBase):
 
 class UpdateLoginLogParam(LoginLogSchemaBase):
     """更新登录日志参数"""
+
+
+class DeleteLoginLogParam(SchemaBase):
+    """删除登录日志参数"""
+
+    pks: list[int] = Field(description='登录日志 ID 列表')
 
 
 class GetLoginLogDetail(LoginLogSchemaBase):
